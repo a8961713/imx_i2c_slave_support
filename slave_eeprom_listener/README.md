@@ -34,22 +34,22 @@ eeprom content at a romFile.
 
 ##### 3. On the master device start some reads/writes to the i2c device
 
- On the MASTER device 
+On the MASTER device 
 
-  - Dump the content of the eeprom
+ Dump the content of the eeprom
 
 	$ i2cdump -y 0 0x64
 
-  - Write the date at address 0xC0
- 
+ Write the date at address 0xC0
+
 	$ date > dateFile
 	$ ./eeprog -i dateFile /dev/i2c-0 0x64 -w 0xc0
 
- - Read the contents again
+ Read the contents again
 	
 	$ i2cdump -y 0 0x64
 
- On the SLAVE device
+On the SLAVE device
 
  You will see some logs like:
 
