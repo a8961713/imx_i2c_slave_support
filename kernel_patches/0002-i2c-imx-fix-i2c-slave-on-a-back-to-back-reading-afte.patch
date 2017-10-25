@@ -1,0 +1,90 @@
+From 2350c2418990bb3f4ac0c72669835ba372b62c3d Mon Sep 17 00:00:00 2001
+From: Juan Gutierrez <juan.gutierrez@nxp.com>
+Date: Tue, 24 Oct 2017 11:16:20 -0500
+Subject: [PATCH 2/3] i2c-imx: fix i2c-slave on a back to back reading after
+ NACK
+
+When the master sends a NACK after a reading routine the
+I2C_SLAVE_READ_PROCESSED event was not notified to the i2c-slave
+backend, which causes the register address not to be incremeted.
+This results on reading the same address again on a back to back
+reading.
+
+Also On the i2c-slave backend the I2C_SLAVE_READ_PROCESSED
+should not fallthrough to the I2C_SLAVE_READ_REQUESTED event,
+since on the NACK case, we should increment the current address
+(read-processed) but not continue the tranfer (read-requested).
+So calling explicitly the 2 events is required on the case of a
+reading request from master.
+
+Signed-off-by: Juan Gutierrez <juan.gutierrez@nxp.com>
+---
+ drivers/i2c/busses/i2c-imx.c   | 8 ++++++--
+ drivers/i2c/i2c-slave-eeprom.c | 9 +++++----
+ 2 files changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-imx.c b/drivers/i2c/busses/i2c-imx.c
+index 310b431..a1d5809 100644
+--- a/drivers/i2c/busses/i2c-imx.c
++++ b/drivers/i2c/busses/i2c-imx.c
+@@ -696,6 +696,7 @@ static int i2c_imx_slave_threadfn(void *pdata)
+ 			if (status & I2SR_IAAS) {
+ 				if (status & I2SR_SRW) {
+ 					/* master wants to read from us */
++					dev_dbg(&i2c_imx->adapter.dev, "read requested");
+ 					i2c_slave_event(i2c_imx->slave,
+ 						I2C_SLAVE_READ_REQUESTED, &data);
+ 					ctl |= I2CR_MTX;
+@@ -718,8 +719,11 @@ static int i2c_imx_slave_threadfn(void *pdata)
+ 				/* slave send */
+ 				if (ctl & I2CR_MTX) {
+ 					if (!(status & I2SR_RXAK)) {	/*ACK received */
++						dev_dbg(&i2c_imx->adapter.dev, "read ACK requested");
+ 						i2c_slave_event(i2c_imx->slave,
+ 							I2C_SLAVE_READ_PROCESSED, &data);
++						i2c_slave_event(i2c_imx->slave,
++                                                        I2C_SLAVE_READ_REQUESTED, &data);
+ 						ctl |= I2CR_MTX;
+ 						imx_i2c_write_reg(ctl, i2c_imx, IMX_I2C_I2CR);
+ 						/*send data */
+@@ -727,9 +731,9 @@ static int i2c_imx_slave_threadfn(void *pdata)
+ 					} else {
+ 						/*no ACK. */
+ 						/*dummy read */
+-						dev_dbg(&i2c_imx->adapter.dev, "read requested");
++						dev_dbg(&i2c_imx->adapter.dev, "read NACK requested");
+ 						i2c_slave_event(i2c_imx->slave,
+-							I2C_SLAVE_READ_REQUESTED, &data);
++							I2C_SLAVE_READ_PROCESSED, &data);
+ 
+ 						ctl &= ~I2CR_MTX;
+ 						imx_i2c_write_reg(ctl, i2c_imx, IMX_I2C_I2CR);
+diff --git a/drivers/i2c/i2c-slave-eeprom.c b/drivers/i2c/i2c-slave-eeprom.c
+index 8223746..f3fe399 100644
+--- a/drivers/i2c/i2c-slave-eeprom.c
++++ b/drivers/i2c/i2c-slave-eeprom.c
+@@ -50,16 +50,17 @@ static int i2c_slave_eeprom_slave_cb(struct i2c_client *client,
+ 	case I2C_SLAVE_READ_PROCESSED:
+ 		/* The previous byte made it to the bus, get next one */
+ 		eeprom->buffer_idx++;
+-		/* fallthrough */
++		break;
++
+ 	case I2C_SLAVE_READ_REQUESTED:
+-		spin_lock(&eeprom->buffer_lock);
+-		*val = eeprom->buffer[eeprom->buffer_idx];
+-		spin_unlock(&eeprom->buffer_lock);
+ 		/*
+ 		 * Do not increment buffer_idx here, because we don't know if
+ 		 * this byte will be actually used. Read Linux I2C slave docs
+ 		 * for details.
+ 		 */
++		spin_lock(&eeprom->buffer_lock);
++		*val = eeprom->buffer[eeprom->buffer_idx];
++		spin_unlock(&eeprom->buffer_lock);
+ 		break;
+ 
+ 	case I2C_SLAVE_STOP:
+-- 
+2.7.4
+

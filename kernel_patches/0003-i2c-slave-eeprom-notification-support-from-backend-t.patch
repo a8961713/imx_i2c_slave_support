@@ -1,0 +1,125 @@
+From 51d5ca37a4a4ea8947c4128ac4d9dc0c022ff750 Mon Sep 17 00:00:00 2001
+From: Juan Gutierrez <juan.gutierrez@nxp.com>
+Date: Tue, 24 Oct 2017 11:26:08 -0500
+Subject: [PATCH 3/3] i2c-slave-eeprom: notification support from backend to
+ userspace
+
+Add a notification support, so a user-space process can register
+to the slave-eeprom backend events.
+
+User will recive a particular SIG_QUEUE signal When a I2C_SLAVE_STOP
+event occurs. This way the user process is notified when a TX/RX
+has been happend and do something.
+
+To register a sysfs named proc_id is exposed. The pid of the observer
+user-space process should be written to this sysfs to be able to
+receive the SIG_QUEUE signalisation.
+
+For example to register a process with pid=777 to receieve the
+SIG_QUEUE signals (for a eeprom salve backend at 0x64 on i2c-0)
+
+$ echo 777 > /sys/bus/i2c/devices/i2c-0/0-0064/proc_id
+
+Signed-off-by: Juan Gutierrez <juan.gutierrez@nxp.com>
+---
+ drivers/i2c/i2c-slave-eeprom.c | 46 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/drivers/i2c/i2c-slave-eeprom.c b/drivers/i2c/i2c-slave-eeprom.c
+index f3fe399..76fd8ae 100644
+--- a/drivers/i2c/i2c-slave-eeprom.c
++++ b/drivers/i2c/i2c-slave-eeprom.c
+@@ -21,6 +21,12 @@
+ #include <linux/slab.h>
+ #include <linux/spinlock.h>
+ #include <linux/sysfs.h>
++#include <linux/kobject.h>
++#include <asm/siginfo.h>
++
++#define SIG_TEST 44
++static int pid;
++static struct task_struct *task = NULL;
+ 
+ struct eeprom_data {
+ 	struct bin_attribute bin;
+@@ -33,6 +39,8 @@ struct eeprom_data {
+ static int i2c_slave_eeprom_slave_cb(struct i2c_client *client,
+ 				     enum i2c_slave_event event, u8 *val)
+ {
++	struct siginfo info;
++
+ 	struct eeprom_data *eeprom = i2c_get_clientdata(client);
+ 
+ 	switch (event) {
+@@ -44,9 +52,12 @@ static int i2c_slave_eeprom_slave_cb(struct i2c_client *client,
+ 			spin_lock(&eeprom->buffer_lock);
+ 			eeprom->buffer[eeprom->buffer_idx++] = *val;
+ 			spin_unlock(&eeprom->buffer_lock);
++
+ 		}
++
+ 		break;
+ 
++
+ 	case I2C_SLAVE_READ_PROCESSED:
+ 		/* The previous byte made it to the bus, get next one */
+ 		eeprom->buffer_idx++;
+@@ -64,6 +75,13 @@ static int i2c_slave_eeprom_slave_cb(struct i2c_client *client,
+ 		break;
+ 
+ 	case I2C_SLAVE_STOP:
++		if (task && !eeprom->first_write) {
++			memset(&info, 0, sizeof(struct siginfo));
++			info.si_signo = SIG_TEST;
++			info.si_code = SI_QUEUE;
++			info.si_int = eeprom->buffer_idx;
++			send_sig_info(SIG_TEST, &info, task);
++		}
+ 	case I2C_SLAVE_WRITE_REQUESTED:
+ 		eeprom->first_write = true;
+ 		break;
+@@ -111,6 +129,30 @@ static ssize_t i2c_slave_eeprom_bin_write(struct file *filp, struct kobject *kob
+ 	return count;
+ }
+ 
++
++static ssize_t proc_id_show(struct kobject *kobj, struct kobj_attribute *attr,
++                      char *buf)
++{
++        return sprintf(buf, "%d\n", pid);
++}
++
++static ssize_t proc_id_store(struct kobject *kobj, struct kobj_attribute *attr,
++                      char *buf, size_t count)
++{
++	sscanf(buf, "%du", &pid);
++
++	rcu_read_lock();
++	task = pid_task(find_pid_ns(pid, &init_pid_ns), PIDTYPE_PID);
++	if (!task)
++		pr_err("Not able to find pid_task\n");
++	rcu_read_unlock();
++
++        return count;
++}
++
++static struct kobj_attribute proc_id_attr =__ATTR(proc_id, 0660, proc_id_show,
++						  proc_id_store);
++
+ static int i2c_slave_eeprom_probe(struct i2c_client *client, const struct i2c_device_id *id)
+ {
+ 	struct eeprom_data *eeprom;
+@@ -136,6 +178,10 @@ static int i2c_slave_eeprom_probe(struct i2c_client *client, const struct i2c_de
+ 	if (ret)
+ 		return ret;
+ 
++	ret = sysfs_create_file(&client->dev.kobj, &proc_id_attr.attr);
++	if (ret)
++		return ret;
++
+ 	ret = i2c_slave_register(client, i2c_slave_eeprom_slave_cb);
+ 	if (ret) {
+ 		sysfs_remove_bin_file(&client->dev.kobj, &eeprom->bin);
+-- 
+2.7.4
+
