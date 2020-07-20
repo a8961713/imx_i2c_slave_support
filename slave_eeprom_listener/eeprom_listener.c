@@ -19,7 +19,7 @@ void register_pid(int pid, char *bus, int addr) {
   int num;
   char str[100];
 
-  num = sprintf(str, "/sys/bus/i2c/devices/%s/0-00%x/proc_id", bus, addr);
+  num = sprintf(str, "/sys/bus/i2c/devices/%s/%c-00%x/proc_id", bus, bus[4], addr);
   fd = open(str, O_WRONLY);
   
   num = sprintf(str, "%d", pid);
@@ -42,7 +42,7 @@ void load_eeprom_from_file(char* filename, char *bus, int addr) {
   char ch;
   char str[100];
 
-  sprintf(str, "/sys/bus/i2c/devices/%s/0-00%x/slave-eeprom", bus, addr);
+  sprintf(str, "/sys/bus/i2c/devices/%s/%c-00%x/slave-eeprom", bus, bus[4], addr);
   fd_device = fopen(str, "w");
   fd_file = fopen(filename, "r");
  
@@ -69,7 +69,7 @@ void backup_eeprom_on_file(char* filename, char *bus, int addr) {
   char ch;
   char str[100];
 
-  sprintf(str, "/sys/bus/i2c/devices/%s/0-00%x/slave-eeprom", bus, addr);
+  sprintf(str, "/sys/bus/i2c/devices/%s/%c-00%x/slave-eeprom", bus, bus[4], addr);
   fd_device = fopen(str, "r");
   fd_file = fopen(filename, "w");
 
